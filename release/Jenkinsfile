@@ -1,0 +1,199 @@
+pipeline {
+	agent {
+		label 'host && freebsd'
+	}
+
+	parameters {
+		booleanParam(name: 'skip_jailsetup', defaultValue: true,
+				description: 'Set to true to skip the jail setup stage')
+		booleanParam(name: 'skip_buildworld', defaultValue: false,
+				description: 'Set to true to skip the buildworld stage')
+		booleanParam(name: 'skip_buildkernel', defaultValue: false,
+				description: 'Set to true to skip the buildkernel stage')
+		booleanParam(name: 'skip_release', defaultValue: false,
+				description: 'Set to true to skip the make release stage')
+		booleanParam(name: 'clean_all', defaultValue: false,
+				description: 'Set to true to clean build objects')
+		booleanParam(name: 'clean_kernel', defaultValue: false,
+				description: 'Set to true to clean up targets built by a preceding buildkernel')
+		booleanParam(name: 'clean_world', defaultValue: false,
+				description: 'Set to true to clean up targets built by a preceding buildworld')
+		booleanParam(name: 'clean_release', defaultValue: true,
+				description: 'Set to true to clean up targets built by a preceding release')
+		string(name: 'kernconf', defaultValue: 'GENERIC',
+				description: 'Set to your desired kernel configuration')
+		string(name: 'branch', defaultValue: 'main',
+				description: 'Set to your desired git branch')
+		string(name: 'jail_basedir', defaultValue: '/usr/jails/',
+				description: 'Set to directory containing your jails (jail base directory)')
+		string(name: 'vmformats', defaultValue: 'raw',
+				description: 'Set to your desired vm disk format')
+		string(name: 'vmfslist', defaultValue: 'zfs',
+				description: 'Set to your desired vm filesystems (VMFSLIST)')
+		string(name: 'bsdinstall_distsite', defaultValue: 'https://pkg.spmzt.net/release/ftp/',
+				description: 'Set bsdinstall distribution site')
+		string(name: 'release_dir', defaultValue: '/usr/jails/pkg/usr/local/www/release',
+				description: 'Set distribution directory')
+		string(name: 'giturl', defaultValue: 'git@spmzt.net',
+				description: 'Set to your FreeBSD-src repository')
+		string(name: 'jobs', defaultValue: '24',
+				description: 'Set to your desired concurrent jobs')
+	}
+	environment {
+		SRC = "${env.HOME}/src"
+		WITHOUT_UNIFIED_OBJDIR = 1
+		nonInteractive = "YES"
+		TARGET = 'amd64'
+		TARGET_ARCH = 'amd64'
+		JNAME = "${params.branch}_${params.kernconf}"
+		JBASEDIR = "/usr/jails"
+		JPATH = "${env.JBASEDIR}/${env.JNAME}"
+	}
+
+	stages {
+		stage("jail") {
+			stages {
+				stage("setup") {
+					when { expression { params.skip_jailsetup != true } }
+					steps {
+						sh "mdo chflags -R noschg ${env.JPATH} || true"
+						sh "mdo rm -r ${env.JPATH} || true"
+						sh "mdo env nonInteractive='YES' BSDINSTALL_DISTSITE=${params.bsdinstall_distsite} bsdinstall jail ${env.JPATH}"
+						sh "mdo cp /etc/resolv.conf ${env.JPATH}/etc/"
+						sh "mdo pkg -c ${env.JPATH} install -y pkg"
+					}
+				}
+				stage("mount_src") {
+					steps {
+						sh "mdo mount -t nullfs ${env.SRC} ${env.JPATH}/usr/src"
+					}
+				}
+				stage("start") {
+					steps {
+						sh """mdo jail -c persist \
+						 name=${env.JNAME} \
+						 path=${env.JPATH} \
+						 host.hostname="${env.JNAME}.spmzt.net" \
+						 allow.chflags \
+						 allow.mount \
+						 allow.mount.devfs \
+						 enforce_statfs=1 \
+						 mount.devfs \
+						 devfs_ruleset=4 \
+						 ip4=inherit ip6=inherit
+						"""
+					}
+				}
+			}
+		}
+		stage("pull") {
+			steps {
+				dir("${env.SRC}") {
+					checkout scmGit(branches: [[name: "${params.branch}"]],
+						extensions: [], userRemoteConfigs: [[
+							credentialsId: 'git-ssh-key',
+							url: "${params.giturl}"]
+						]
+					)
+				}
+			}
+		}
+		stage("clean") {
+			stages {
+				stage("cleandir") {
+					when { expression { params.clean_all == true } }
+					steps {
+						sh "mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} cleandir"
+						sh "mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} cleandir"
+					}
+				}
+				stage("cleankernel") {
+					when {
+						expression { params.clean_kernel == true }
+					  expression { params.clean_all != true }
+					}
+					steps {
+						sh "mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} cleankernel"
+					}
+				}
+				stage("cleanworld") {
+					when {
+						expression { params.clean_world == true }
+					  expression { params.clean_all != true }
+					}
+					steps {
+						sh "mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} cleanworld"
+					}
+				}
+				stage("cleanrelease") {
+					when {
+						expression { params.clean_release == true }
+					}
+					steps {
+						sh "mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} -C release clean"
+					}
+				}
+			}
+		}
+		stage("buildworld") {
+			when { expression { params.skip_buildworld != true } }
+			steps {
+				sh """mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} \
+				 -DWITHOUT_CLEAN buildworld \
+				 TARGET=${env.TARGET} TARGET_ARCH=${env.TARGET_ARCH}
+				 """
+			}
+		}
+		stage("kernel-toolchain") {
+			when { expression { params.skip_buildworld == true } }
+			steps {
+				sh """mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} \
+				 -DWITHOUT_CLEAN kernel-toolchain \
+				 TARGET=${env.TARGET} TARGET_ARCH=${env.TARGET_ARCH}
+				 """
+			}
+		}
+		stage("buildkernel") {
+			when { expression { params.skip_buildkernel != true } }
+			steps {
+				sh """mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} \
+				 -DWITHOUT_CLEAN buildkernel \
+				 KERNCONF=${params.kernconf} \
+				 TARGET=${env.TARGET} TARGET_ARCH=${env.TARGET_ARCH}
+				 """
+			}
+		}
+		stage("release") {
+			when { expression { params.skip_release != true } }
+			stages {
+				stage("obj") {
+					steps {
+						sh "mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} -C release obj"
+					}
+				}
+				stage("ftp") {
+					steps {
+						sh "mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} -C release -DNOPORTS -DNOSRC -DNODOC packagesystem"
+					}
+				}
+				stage("vm-image") {
+					steps {
+						sh "mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} -C release vm-image WITH_VMIMAGES=YES VMFORMATS=\"${params.vmformats}\" VMFSLIST=\"${params.vmfslist}\" NOPKGBASE=YES"
+					}
+				}
+				stage("vm-install") {
+					steps {
+						sh "mdo jexec -l -d /usr/src ${env.JNAME} make -j${params.jobs} -C release vm-install WITH_VMIMAGES=YES VMFORMATS=\"${params.vmformats}\" VMFSLIST=\"${params.vmfslist}\" NOPKGBASE=YES DESTDIR=/usr/obj/release"
+						sh "mdo mv -f ${env.JPATH}/usr/obj/release ${params.release_dir}/${params.branch}"
+					}
+				}
+			}
+		}
+	}
+	post {
+		always {
+			sh "mdo umount ${env.JPATH}/usr/src"
+			sh "mdo jail -r ${env.JNAME}"
+		}
+	}
+}

@@ -1,0 +1,7 @@
+ports-mgmt/pkg
+editors/vim
+devel/git
+devel/gdb
+shells/zsh
+shells/zsh-autosuggestions
+shells/zsh-completions
