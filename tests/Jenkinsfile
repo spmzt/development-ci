@@ -1,0 +1,95 @@
+pipeline {
+	agent {
+		label 'host && freebsd'
+	}
+
+	parameters {
+		string(name: 'kernconf', defaultValue: 'GENERIC',
+				description: 'Set to your desired kernel configuration')
+		string(name: 'branch', defaultValue: 'main',
+				description: 'Set your git branch')
+		string(name: 'method', defaultValue: 'src',
+				description: 'Set to your desired method for obtaining the source code')
+		string(name: 'vmsize', defaultValue: '10G',
+				description: 'Set to your desired maximum vm size')
+		string(name: 'vmswap', defaultValue: '4G',
+				description: 'Set to your desired vm swap size')
+		string(name: 'vmformat', defaultValue: 'zrawdisk',
+				description: 'Set this for output image format')
+		string(name: 'jobs', defaultValue: '24',
+				description: 'Set to your desired concurrent jobs')
+		string(name: 'zfsdisk', defaultValue: '/dev/zvol/tank/vm/poudriereimage/disk0',
+				description: 'Set the zvol path of your vm disk in which the tests are run')
+		string(name: 'vmout', defaultValue: '/home/spmzt/image/',
+				description: 'Set output directory for final image')
+		string(name: 'giturl', defaultValue: 'git.spmzt.net:freebsd/src.git',
+				description: 'Set to your FreeBSD-src repository')
+	}
+	environment {
+		SRC = "${env.HOME}/src"
+		NAME = "${params.branch}_${params.kernconf}"
+		VMPKG = "${env.WORKSPACE}/develop.pkglist"
+	}
+
+	stages {
+		stage("pull") {
+		steps {
+			dir("${env.SRC}") {
+				checkout scmGit(branches: [[name: "${params.branch}"]],
+				  extensions: [], userRemoteConfigs: [[
+						credentialsId: 'git-ssh-key',
+						url: "${params.giturl}"]
+					])
+				}
+			}
+		}
+		stage("jail") {
+			stages {
+				stage("setup") {
+					steps {
+						script {
+							try {
+								sh "mdo poudriere jail -c -j ${env.NAME} -K ${params.kernconf} -J${params.jobs} -b -m ${params.method}=${env.SRC}"
+							} catch (e) {
+								sh "mdo poudriere jail -u -j ${env.NAME} -J${params.jobs} -b"
+							}
+						}
+					}
+				}
+				stage("packages") {
+					steps {
+						sh "mdo poudriere bulk -j ${env.NAME} -b latest -f ${env.VMPKG}"
+					}
+				}
+			}
+		}
+		stage("poudriere") {
+			stages {
+				stage("image") {
+					steps {
+						sh "mdo poudriere image -j ${env.NAME} -c overlay -t ${params.vmformat} -f ${env.VMPKG} -s ${params.vmsize} -w ${params.vmswap} -o ${params.vmout} -n ${env.NAME}"
+					}
+				}
+			}
+		}
+		stage("test") {
+			stages {
+				stage("prepare") {
+					steps {
+						sh "mdo dd if=${params.vmout}/${env.NAME}.img of=${params.vmdisk} bs=1M"
+					}
+				}
+				stage("run") {
+					steps {
+						sh "mdo vm start poudriereimage"
+					}
+				}
+			}
+		}
+	}
+	post {
+		always {
+			sh "mdo poudriere jail -k -j ${env.NAME}"
+		}
+	}
+}
