@@ -1,0 +1,2 @@
+# Device			Mountpoint	FStype	Options		Dump	Pass#
+[2a01:e140:10:10::a]:tests	/.kyua		nfs	rw,nfsv4	0	0

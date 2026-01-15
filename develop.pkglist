@@ -1,3 +1,5 @@
+archivers/gtar
+devel/atf
 devel/gdb
 devel/git
 devel/glib20
@@ -5,7 +7,19 @@ devel/py-pytest
 devel/py-twisted
 editors/vim
 lang/python3
+net/isc-dhcp44-server
+net/ndisc6
+net/py-dpkt
+net/scapy
+net/socat
+net/tcptestsuite
 ports-mgmt/pkg
+security/nist-kat
+security/nmap
 security/openvpn
+shells/ksh93
+sysutils/coreutils
 sysutils/porch
+sysutils/sg3_utils
+security/sudo
 textproc/jq

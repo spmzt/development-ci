@@ -1,4 +1,5 @@
 #!/bin/sh
-mount_nfs -onfsv4 [2a01:e140:10:10::a]:tests /.kyua
-kyua test -k /usr/tests/Kyuafile
+cd /usr/tests
+kyua test --results-file=/.kyua/results.db
+kyua report-html --output=/.kyua/results --results-file=/.kyua/results.db
 init 0
