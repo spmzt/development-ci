@@ -1,7 +1,11 @@
-ports-mgmt/pkg
-editors/vim
-devel/git
 devel/gdb
-shells/zsh
-shells/zsh-autosuggestions
-shells/zsh-completions
+devel/git
+devel/glib20
+devel/py-pytest
+devel/py-twisted
+editors/vim
+lang/python3
+ports-mgmt/pkg
+security/openvpn
+sysutils/porch
+textproc/jq
